@@ -1,13 +1,15 @@
 import pandas as pd
+import matplotlib
+matplotlib.use("TkAgg")  # or "Qt5Agg" if you prefer
 import matplotlib.pyplot as plt
 from datetime import datetime
 
 # === USER SETTINGS ===
-csv_path = "river_flows.csv"      # your CSV
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"      # your CSV
 date_col = "Date"
-flow_col = "Flow_m3s"
+flow_col = "Flow_cms"
 ref_month, ref_day = 3, 15        # March 15 reference
-window_months = 12
+window_months = 6
 normalize = True                  # True for shape comparison
 highlight_year = 2024             # optional: highlight a specific year
 

@@ -1,9 +1,12 @@
 import pandas as pd
+import matplotlib
+matplotlib.use("TkAgg")  # or "Qt5Agg" if you prefer
 import matplotlib.pyplot as plt
 
 # --- Load data ---
 # Replace with your actual CSV path
-df = pd.read_csv("/Users/beth/Downloads/retrospective_760686408.csv")
+#df = pd.read_csv("/Users/beth/Downloads/retrospective_760686408.csv")
+df = pd.read_csv("/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv")
 
 # --- Parse date and compute daily cumulative volumes per year ---
 df["Date"] = pd.to_datetime(df["Date"])

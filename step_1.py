@@ -1,11 +1,13 @@
 import pandas as pd
+import matplotlib
+matplotlib.use("TkAgg")  # or "Qt5Agg" if you prefer
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # === USER SETTINGS ===
-csv_path = "/Users/beth/Downloads/retrospective_760706416_ohio.csv"  # your file path
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"  # your file path
 date_col = "Date"  # column name for dates
-flow_col = "Flow_m3s"  # column name for flow
+flow_col = "Flow_cms"  # column name for flow
 ref_month = 3  # March
 ref_day = 15  # 15th
 window_months = 12  # before and after (so total 24 months)
