@@ -1,8 +1,10 @@
 import pandas as pd
+import matplotlib
+matplotlib.use("TkAgg")  # or "Qt5Agg" if you prefer
 import matplotlib.pyplot as plt
 
 # --- Load data ---
-df = pd.read_csv("/Users/beth/Downloads/retrospective_760686408.csv", parse_dates=["Date"])
+df = pd.read_csv("/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv", parse_dates=["Date"])
 seconds_per_day = 24 * 60 * 60
 df["Volume_m3"] = df["Flow_cms"] * seconds_per_day
 
