@@ -2,22 +2,25 @@
 # Compare predictive power of different rolling windows (past vs future flow volumes)
 
 import pandas as pd
+import matplotlib
+matplotlib.use("TkAgg")  # or "Qt5Agg" if you prefer
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
 import numpy as np
 
 # === USER SETTINGS ===
-csv_path = "/Users/bethlarsen/Documents/Hydro Research/geoglows_stat_forecast/flow_data.csv"
-ref_month = 6  # reference month (e.g., June)
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"
+ref_month = 3  # reference month (e.g., June)
 ref_day = 15   # reference day
 window_months_list = [3, 6, 9, 12]  # months of past/future to test
 date_col = "Date"
-flow_col = "Flow_m3s"
+flow_col = "Flow_cms"
 
 # === LOAD AND PREP DATA ===
 df = pd.read_csv(csv_path)
-df[date_col] = pd.to_datetime(df[date_col])
+df[date_col] = pd.to_datetime(df[date_col]).dt.tz_localize(None)
 df = df.set_index(date_col).sort_index()
+
 
 # Convert flow to daily volume (m³/day)
 df["Volume_m3"] = df[flow_col] * 24 * 60 * 60
