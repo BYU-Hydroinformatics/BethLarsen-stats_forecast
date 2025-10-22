@@ -9,16 +9,16 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.metrics import r2_score
 
 # === USER SETTINGS ===
-csv_path = "/Users/bethlarsen/Documents/Hydro Research/geoglows_stat_forecast/flow_data.csv"
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"
 ref_month = 6
 ref_day = 15
 window_months_list = [3, 6, 9, 12]
 date_col = "Date"
-flow_col = "Flow_m3s"
+flow_col = "Flow_cms"
 
 # === LOAD AND PREP DATA ===
 df = pd.read_csv(csv_path)
-df[date_col] = pd.to_datetime(df[date_col])
+df[date_col] = pd.to_datetime(df[date_col]).dt.tz_localize(None)
 df = df.set_index(date_col).sort_index()
 df["Volume_m3"] = df[flow_col] * 24 * 60 * 60
 
