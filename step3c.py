@@ -3,6 +3,8 @@
 
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("TkAgg")
 import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
@@ -61,25 +63,28 @@ for window_months in window_months_list:
     models["Quadratic"] = (y_pred_poly, poly_model.coef_[1:], poly_model.intercept_, r2_score(y, y_pred_poly))
 
     # --- 3️⃣ Logarithmic ---
-    X_log = np.log(X[X > 0])  # avoid negative/zero
-    y_log = y[:len(X_log)]
+    mask_log = X.flatten() > 0
+    X_log = np.log(X[mask_log]).reshape(-1, 1)
+    y_log = y[mask_log]
     log_model = LinearRegression().fit(X_log, y_log)
     y_pred_log = log_model.predict(X_log)
     models["Logarithmic"] = (y_pred_log, log_model.coef_[0], log_model.intercept_, r2_score(y_log, y_pred_log))
 
     # --- 4️⃣ Exponential (log-transform y) ---
-    y_pos = y[y > 0]
-    X_exp = X[:len(y_pos)]
-    exp_model = LinearRegression().fit(X_exp, np.log(y_pos))
+    mask_exp = y > 0
+    X_exp = X[mask_exp]
+    y_exp = np.log(y[mask_exp])
+    exp_model = LinearRegression().fit(X_exp, y_exp)
     y_pred_exp = np.exp(exp_model.predict(X_exp))
-    models["Exponential"] = (y_pred_exp, exp_model.coef_[0], exp_model.intercept_, r2_score(y_pos, y_pred_exp))
+    models["Exponential"] = (y_pred_exp, exp_model.coef_[0], exp_model.intercept_, r2_score(y[mask_exp], y_pred_exp))
 
     # --- 5️⃣ Power-law (log-log) ---
-    X_pow = np.log(X[X > 0])
-    y_pow = np.log(y[:len(X_pow)])
+    mask_pow = (X.flatten() > 0) & (y > 0)
+    X_pow = np.log(X[mask_pow]).reshape(-1, 1)
+    y_pow = np.log(y[mask_pow])
     pow_model = LinearRegression().fit(X_pow, y_pow)
     y_pred_pow = np.exp(pow_model.predict(X_pow))
-    models["Power"] = (y_pred_pow, pow_model.coef_[0], pow_model.intercept_, r2_score(y[:len(X_pow)], y_pred_pow))
+    models["Power"] = (y_pred_pow, pow_model.coef_[0], pow_model.intercept_, r2_score(y[mask_pow], y_pred_pow))
 
     # --- Pick best model by R² ---
     best_form = max(models.items(), key=lambda kv: kv[1][3])
