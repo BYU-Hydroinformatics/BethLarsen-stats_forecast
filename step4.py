@@ -2,20 +2,22 @@
 # Cumulative volume curves before/after reference date, fit mean equation
 
 import pandas as pd
+import matplotlib
+matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 
 # === SETTINGS ===
-csv_path = "/Users/bethlarsen/Documents/Hydro Research/geoglows_stat_forecast/flow_data.csv"
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"
 date_col = "Date"
-flow_col = "Flow_m3s"
-ref_month, ref_day = 3, 15
+flow_col = "Flow_cms"
+ref_month, ref_day = 9, 15
 window_days = 90  # 3 months before/after
 
 # === LOAD DATA ===
 df = pd.read_csv(csv_path)
-df[date_col] = pd.to_datetime(df[date_col])
+df[date_col] = pd.to_datetime(df[date_col]).dt.tz_localize(None)
 df = df.set_index(date_col).sort_index()
 df["Volume_m3"] = df[flow_col] * 24 * 3600
 
