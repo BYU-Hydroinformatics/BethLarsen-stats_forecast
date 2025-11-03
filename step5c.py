@@ -11,7 +11,8 @@ csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospe
 date_col = "Date"
 flow_col = "Flow_cms"
 target_day = "4-15"  # reference date (MM-DD)
-months_window = 6     # number of months before/after
+window_before_months = 9  # 9 months before
+window_after_months = 3    # 3 months after
 validation_fraction = 0.1  # fraction of years to leave out for testing
 
 # === MODEL FUNCTIONS ===
@@ -39,7 +40,7 @@ models = {
 }
 
 # === FUNCTIONS ===
-def get_window_data(df, target_day, months_window):
+def get_window_data(df, target_day, window_before_months, window_after_months):
     """Return data within +/- months_window around target_day for all years"""
     df["Date"] = pd.to_datetime(df[date_col]).dt.tz_localize(None)
     df = df.set_index("Date").sort_index()
@@ -49,8 +50,8 @@ def get_window_data(df, target_day, months_window):
 
     for y in years:
         center_date = pd.Timestamp(f"{y}-{target_day}")
-        start_date = center_date - pd.DateOffset(months=months_window)
-        end_date = center_date + pd.DateOffset(months=months_window)
+        start_date = center_date - pd.DateOffset(months=window_before_months)
+        end_date = center_date + pd.DateOffset(months=window_after_months)
 
         if start_date < df.index.min() or end_date > df.index.max():
             continue
@@ -66,7 +67,8 @@ def get_window_data(df, target_day, months_window):
 
 # === LOAD & PREP DATA ===
 df = pd.read_csv(csv_path)
-window_data = get_window_data(df, target_day, months_window)
+window_data = get_window_data(df, target_day, window_before_months, window_after_months)
+print(window_data.head(10))
 years = sorted(window_data["Year"].unique())
 n_valid = max(1, int(len(years) * validation_fraction))
 
