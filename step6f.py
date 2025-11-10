@@ -1,6 +1,6 @@
-# step6_ytd_forecast_shape_adjusted.py
+# step6_ytd_forecast_with_extremes_noblend.py
 # Predict 3-month cumulative volume forecast using 9 months of observed data,
-# comparing median, logistic, blended, scaled, and stretched forecasts.
+# comparing median, logistic, scaled, stretched, and wettest/driest forecasts.
 
 import pandas as pd
 import numpy as np
@@ -17,11 +17,10 @@ csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospe
 date_col = "Date"
 flow_col = "Flow_cms"
 ref_month, ref_day = 9, 15
-months_before = 3
+months_before = 9
 months_after = 3
 validation_fraction = 0.1
-blend_alpha = 0.3
-random_seed = 20
+random_seed = 42
 
 # ==========================================================
 # LOAD DATA
@@ -74,6 +73,14 @@ interp_df = pd.concat(interp_list, axis=1)
 interp_df = interp_df.loc[:, interp_df.iloc[-1].notna()]
 median_inc = interp_df.median(axis=1).values
 
+# Identify wettest and driest years
+final_values = interp_df.iloc[-1]
+wettest_year = final_values.idxmax()
+driest_year = final_values.idxmin()
+wettest_inc = interp_df[wettest_year].values
+driest_inc = interp_df[driest_year].values
+print(f"Wettest year: {wettest_year} | Driest year: {driest_year}")
+
 # ==========================================================
 # FIT LOGISTIC CURVE TO MEDIAN INCREMENT
 # ==========================================================
@@ -88,8 +95,6 @@ except RuntimeError:
     print("⚠️ Logistic fit failed — reverting to median only.")
     logistic_inc = median_inc.copy()
     popt = [np.nan, np.nan, np.nan]
-
-blend_inc = blend_alpha * logistic_inc + (1 - blend_alpha) * median_inc
 
 # ==========================================================
 # VALIDATION AND VISUALIZATION
@@ -129,24 +134,21 @@ for vy in sorted(val_years):
     # Forecasts
     med_fore = median_inc[:n]
     log_fore = logistic_inc[:n]
-    blend_fore = blend_inc[:n]
+    wet_fore = wettest_inc[:n]
+    dry_fore = driest_inc[:n]
 
-    # === New: Shape-adjusted forecasts ===
+    # Shape-adjusted forecasts
     ratio = cum_at_ref / median_9mo_at_ref  # relative wetness/dryness
-
-    # Scaled median forecast (vertical scaling)
     scaled_fore = median_inc[:n] * ratio
-
-    # Stretched median forecast (horizontal time stretch)
     stretched_days = days_common / ratio
     stretched_fore = np.interp(days_common[:n], stretched_days, median_inc, left=np.nan, right=np.nan)
 
-    # Metrics for blend
+    # Metrics for main forecasts
     rmse_med = np.sqrt(mean_squared_error(true_inc, med_fore))
     rmse_log = np.sqrt(mean_squared_error(true_inc, log_fore))
-    rmse_blend = np.sqrt(mean_squared_error(true_inc, blend_fore))
-    r2_blend = r2_score(true_inc, blend_fore)
-    results.append([vy, rmse_med, rmse_log, rmse_blend, r2_blend])
+    r2_med = r2_score(true_inc, med_fore)
+    r2_log = r2_score(true_inc, log_fore)
+    results.append([vy, rmse_med, rmse_log, r2_med, r2_log])
 
     # === Visualization (9 months observed + 3 months forecast) ===
     plt.figure(figsize=(10, 5))
@@ -154,9 +156,10 @@ for vy in sorted(val_years):
     plt.plot(post_df.index, cum_at_ref + true_inc, color="black", linestyle="--", label="Observed (forecast period)")
     plt.plot(post_df.index, cum_at_ref + med_fore, color="green", label="Median forecast")
     plt.plot(post_df.index, cum_at_ref + log_fore, color="orange", label="Logistic forecast")
-    plt.plot(post_df.index, cum_at_ref + blend_fore, color="blue", linestyle="--", label=f"Blend (α={blend_alpha})")
     plt.plot(post_df.index, cum_at_ref + scaled_fore, color="purple", label="Scaled median")
     plt.plot(post_df.index, cum_at_ref + stretched_fore, color="brown", label="Stretched median")
+    plt.plot(post_df.index, cum_at_ref + wet_fore, color="deepskyblue", linestyle=":", label=f"Wettest year ({wettest_year})")
+    plt.plot(post_df.index, cum_at_ref + dry_fore, color="darkred", linestyle=":", label=f"Driest year ({driest_year})")
     plt.axvline(ref_date, color="gray", linestyle=":", label="Forecast start")
     plt.title(f"{vy} — 9-Month History + 3-Month Forecast")
     plt.xlabel("Date")
@@ -168,8 +171,8 @@ for vy in sorted(val_years):
 # ==========================================================
 # SUMMARY
 # ==========================================================
-res_df = pd.DataFrame(results, columns=["Year", "RMSE_Median", "RMSE_Logistic", "RMSE_Blend", "R2_Blend"])
+res_df = pd.DataFrame(results, columns=["Year", "RMSE_Median", "RMSE_Logistic", "R2_Median", "R2_Logistic"])
 print("\nValidation summary:")
 print(res_df.round(3))
 print("\nAverage metrics:")
-print(res_df[["RMSE_Median", "RMSE_Logistic", "RMSE_Blend", "R2_Blend"]].mean())
+print(res_df[["RMSE_Median", "RMSE_Logistic", "R2_Median", "R2_Logistic"]].mean())
