@@ -1,6 +1,6 @@
-# step6_ytd_forecast.py
+# step6_ytd_forecast_with_extremes.py
 # Predict 3-month cumulative volume forecast using 9 months of observed data,
-# comparing median, logistic, and blended forecasts.
+# comparing median, logistic, blended, and extreme historical forecasts.
 
 import pandas as pd
 import numpy as np
@@ -13,15 +13,15 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ==========================================================
 # SETTINGS
 # ==========================================================
-csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"   # update path
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"
 date_col = "Date"
-flow_col = "Flow_cms"                         # or Flow_cms, depending on your file
+flow_col = "Flow_cms"
 ref_month, ref_day = 9, 15
 months_before = 9
 months_after = 3
 validation_fraction = 0.1
 blend_alpha = 0.3
-random_seed = 42
+random_seed = 40
 
 # ==========================================================
 # LOAD DATA
@@ -63,7 +63,7 @@ max_day = int(hist_post["DayAfter"].max())
 days_common = np.arange(1, max_day + 1)
 
 # ==========================================================
-# INTERPOLATE HISTORICAL CURVES AND COMPUTE MEDIAN
+# INTERPOLATE HISTORICAL CURVES AND COMPUTE MEDIAN/WETTEST/DRIEST
 # ==========================================================
 interp_list = []
 for y in hist_post["Year"].unique():
@@ -71,8 +71,18 @@ for y in hist_post["Year"].unique():
     interp_inc = np.interp(days_common, sub["DayAfter"], sub["IncAfterRef"], left=np.nan, right=np.nan)
     interp_list.append(pd.Series(interp_inc, name=str(y)))
 interp_df = pd.concat(interp_list, axis=1)
-interp_df = interp_df.loc[:, interp_df.iloc[-1].notna()]
+interp_df = interp_df.loc[:, interp_df.iloc[-1].notna()]  # drop incomplete
+
+# Take the last row of each column (total increment at the end of the curve)
+final_values = interp_df.iloc[-1]
+
+# Identify which year had the largest and smallest totals
+wettest_year = final_values.idxmax()
+driest_year = final_values.idxmin()
+wettest_inc = interp_df[wettest_year].values
+driest_inc = interp_df[driest_year].values
 median_inc = interp_df.median(axis=1).values
+
 
 # ==========================================================
 # FIT LOGISTIC CURVE TO MEDIAN INCREMENT
@@ -100,10 +110,10 @@ for vy in sorted(val_years):
     start_ref = ref_date - pd.DateOffset(months=months_before)
     end_ref = ref_date + pd.DateOffset(months=months_after)
     sub = df.loc[str(vy)].copy()
-    if start_ref < df.index.min() or end_ref > df.index.max():
-        # trim to available range instead of skipping
-        start_ref = max(start_ref, df.index.min())
-        end_ref = min(end_ref, df.index.max())
+
+    # trim to available range
+    start_ref = max(start_ref, df.index.min())
+    end_ref = min(end_ref, df.index.max())
 
     sub["CumVol"] = sub["Volume_m3"].cumsum()
     pre_df = sub.loc[start_ref:ref_date].copy()
@@ -118,6 +128,8 @@ for vy in sorted(val_years):
     med_fore = median_inc[:n]
     log_fore = logistic_inc[:n]
     blend_fore = blend_inc[:n]
+    wet_fore = wettest_inc[:n]
+    dry_fore = driest_inc[:n]
 
     # Metrics
     rmse_med = np.sqrt(mean_squared_error(true_inc, med_fore))
@@ -133,8 +145,11 @@ for vy in sorted(val_years):
     plt.plot(post_df.index, cum_at_ref + med_fore, color="green", label="Median forecast")
     plt.plot(post_df.index, cum_at_ref + log_fore, color="orange", label="Logistic forecast")
     plt.plot(post_df.index, cum_at_ref + blend_fore, color="blue", linestyle="--", label=f"Blend (α={blend_alpha})")
+    plt.plot(post_df.index, cum_at_ref + wet_fore, color="dodgerblue", linestyle=":", label="Wettest historical continuation")
+    plt.plot(post_df.index, cum_at_ref + dry_fore, color="saddlebrown", linestyle=":", label="Driest historical continuation")
+
     plt.axvline(ref_date, color="gray", linestyle=":", label="Forecast start")
-    plt.title(f"{vy} — 9-Month History + 3-Month Forecast")
+    plt.title(f"{vy} — 9-Month History + 3-Month Forecast (Median, Logistic, Blend, Extremes)")
     plt.xlabel("Date")
     plt.ylabel("Cumulative Volume (m³)")
     plt.legend()

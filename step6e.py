@@ -1,6 +1,6 @@
-# step6_ytd_forecast.py
+# step6_ytd_forecast_shape_adjusted.py
 # Predict 3-month cumulative volume forecast using 9 months of observed data,
-# comparing median, logistic, and blended forecasts.
+# comparing median, logistic, blended, scaled, and stretched forecasts.
 
 import pandas as pd
 import numpy as np
@@ -15,13 +15,13 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ==========================================================
 csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"   # update path
 date_col = "Date"
-flow_col = "Flow_cms"                         # or Flow_cms, depending on your file
+flow_col = "Flow_cms"
 ref_month, ref_day = 9, 15
 months_before = 9
 months_after = 3
 validation_fraction = 0.1
 blend_alpha = 0.3
-random_seed = 42
+random_seed = 20
 
 # ==========================================================
 # LOAD DATA
@@ -95,31 +95,53 @@ blend_inc = blend_alpha * logistic_inc + (1 - blend_alpha) * median_inc
 # VALIDATION AND VISUALIZATION
 # ==========================================================
 results = []
+
+# Compute median 9-month cumulative volume at ref date (for scaling)
+ref_vols = []
+for y in train_years:
+    ref_date = pd.Timestamp(y, ref_month, ref_day)
+    start_ref = ref_date - pd.DateOffset(months=months_before)
+    sub = df.loc[str(y)].copy()
+    if ref_date not in sub.index or start_ref < sub.index.min():
+        continue
+    sub["CumVol"] = sub["Volume_m3"].cumsum()
+    ref_vol = sub.loc[sub.index <= ref_date, "CumVol"].iloc[-1]
+    ref_vols.append(ref_vol)
+median_9mo_at_ref = np.median(ref_vols)
+
 for vy in sorted(val_years):
     ref_date = pd.Timestamp(vy, ref_month, ref_day)
     start_ref = ref_date - pd.DateOffset(months=months_before)
     end_ref = ref_date + pd.DateOffset(months=months_after)
     sub = df.loc[str(vy)].copy()
-    if start_ref < df.index.min() or end_ref > df.index.max():
-        # trim to available range instead of skipping
-        start_ref = max(start_ref, df.index.min())
-        end_ref = min(end_ref, df.index.max())
-
+    if len(sub) == 0:
+        continue
     sub["CumVol"] = sub["Volume_m3"].cumsum()
     pre_df = sub.loc[start_ref:ref_date].copy()
     post_df = sub.loc[ref_date:end_ref].copy()
+    if pre_df.empty or post_df.empty:
+        continue
 
     cum_at_ref = pre_df["CumVol"].iloc[-1]
     true_inc = post_df["CumVol"].values - cum_at_ref
     n = len(true_inc)
-    days_after = (post_df.index - ref_date).days.values
 
     # Forecasts
     med_fore = median_inc[:n]
     log_fore = logistic_inc[:n]
     blend_fore = blend_inc[:n]
 
-    # Metrics
+    # === New: Shape-adjusted forecasts ===
+    ratio = cum_at_ref / median_9mo_at_ref  # relative wetness/dryness
+
+    # Scaled median forecast (vertical scaling)
+    scaled_fore = median_inc[:n] * ratio
+
+    # Stretched median forecast (horizontal time stretch)
+    stretched_days = days_common / ratio
+    stretched_fore = np.interp(days_common[:n], stretched_days, median_inc, left=np.nan, right=np.nan)
+
+    # Metrics for blend
     rmse_med = np.sqrt(mean_squared_error(true_inc, med_fore))
     rmse_log = np.sqrt(mean_squared_error(true_inc, log_fore))
     rmse_blend = np.sqrt(mean_squared_error(true_inc, blend_fore))
@@ -133,6 +155,8 @@ for vy in sorted(val_years):
     plt.plot(post_df.index, cum_at_ref + med_fore, color="green", label="Median forecast")
     plt.plot(post_df.index, cum_at_ref + log_fore, color="orange", label="Logistic forecast")
     plt.plot(post_df.index, cum_at_ref + blend_fore, color="blue", linestyle="--", label=f"Blend (α={blend_alpha})")
+    plt.plot(post_df.index, cum_at_ref + scaled_fore, color="purple", label="Scaled median")
+    plt.plot(post_df.index, cum_at_ref + stretched_fore, color="brown", label="Stretched median")
     plt.axvline(ref_date, color="gray", linestyle=":", label="Forecast start")
     plt.title(f"{vy} — 9-Month History + 3-Month Forecast")
     plt.xlabel("Date")
