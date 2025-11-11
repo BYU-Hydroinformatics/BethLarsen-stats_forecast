@@ -1,4 +1,4 @@
-# step6_ytd_forecast_with_extremes_noblend.py
+# step6_ytd_forecast_with_extremes_noblend_crossyear.py
 # Predict 3-month cumulative volume forecast using 9 months of observed data,
 # comparing median, logistic, scaled, stretched, and wettest/driest forecasts.
 
@@ -40,24 +40,38 @@ print(f"Training years: {len(train_years)} | Validation years: {len(val_years)}"
 
 # ==========================================================
 # BUILD HISTORICAL INCREMENT CURVES AFTER REF DATE
+# (now allows windows to cross year boundaries)
 # ==========================================================
-def build_post_increment_curves(df, years, ref_month, ref_day, months_after):
+def build_post_increment_curves(df, years, ref_month, ref_day, months_before, months_after):
     curves = []
     for y in years:
+        # reference date for this "year"
         ref_date = pd.Timestamp(y, ref_month, ref_day)
+        start_ref = ref_date - pd.DateOffset(months=months_before)
         end_ref = ref_date + pd.DateOffset(months=months_after)
-        sub = df.loc[str(y)].copy()
-        if ref_date not in sub.index or end_ref > sub.index.max():
+
+        # take the continuous slice across year boundaries
+        window = df.loc[start_ref:end_ref].copy()
+        # must have at least the ref_date and some post-ref data
+        if window.empty or (ref_date not in window.index) or (window.index.max() < end_ref):
+            # skip if missing data
             continue
-        sub["CumVol"] = sub["Volume_m3"].cumsum()
-        cum_at_ref = sub.loc[sub.index <= ref_date, "CumVol"].iloc[-1]
-        post_df = sub.loc[sub.index > ref_date]
+
+        # cumulative within the window (so cum_at_ref is total over the previous months_before months)
+        window["CumVol"] = window["Volume_m3"].cumsum()
+        # cumulative value at ref_date
+        cum_at_ref = window.loc[window.index <= ref_date, "CumVol"].iloc[-1]
+        post_df = window.loc[window.index > ref_date]
         inc = post_df["CumVol"].values - cum_at_ref
         days = (post_df.index - ref_date).days.values
         curves.append(pd.DataFrame({"Year": y, "DayAfter": days, "IncAfterRef": inc}))
+    if len(curves) == 0:
+        return pd.DataFrame(columns=["Year", "DayAfter", "IncAfterRef"])
     return pd.concat(curves, ignore_index=True)
 
-hist_post = build_post_increment_curves(df, train_years, ref_month, ref_day, months_after)
+hist_post = build_post_increment_curves(df, train_years, ref_month, ref_day, months_before, months_after)
+if hist_post.empty:
+    raise RuntimeError("No historical post-ref curves were built — check data coverage and dates.")
 max_day = int(hist_post["DayAfter"].max())
 days_common = np.arange(1, max_day + 1)
 
@@ -67,9 +81,11 @@ days_common = np.arange(1, max_day + 1)
 interp_list = []
 for y in hist_post["Year"].unique():
     sub = hist_post[hist_post["Year"] == y].sort_values("DayAfter")
+    # use np.interp with nan padding if necessary
     interp_inc = np.interp(days_common, sub["DayAfter"], sub["IncAfterRef"], left=np.nan, right=np.nan)
     interp_list.append(pd.Series(interp_inc, name=str(y)))
 interp_df = pd.concat(interp_list, axis=1)
+# drop series that don't reach the final day (like incomplete post windows)
 interp_df = interp_df.loc[:, interp_df.iloc[-1].notna()]
 median_inc = interp_df.median(axis=1).values
 
@@ -98,6 +114,7 @@ except RuntimeError:
 
 # ==========================================================
 # VALIDATION AND VISUALIZATION
+# (use timestamp slices so validation windows can cross year boundaries)
 # ==========================================================
 results = []
 
@@ -106,30 +123,39 @@ ref_vols = []
 for y in train_years:
     ref_date = pd.Timestamp(y, ref_month, ref_day)
     start_ref = ref_date - pd.DateOffset(months=months_before)
-    sub = df.loc[str(y)].copy()
-    if ref_date not in sub.index or start_ref < sub.index.min():
+    # slice across years
+    pre_window = df.loc[start_ref:ref_date].copy()
+    if pre_window.empty or (ref_date not in pre_window.index):
         continue
-    sub["CumVol"] = sub["Volume_m3"].cumsum()
-    ref_vol = sub.loc[sub.index <= ref_date, "CumVol"].iloc[-1]
+    pre_window["CumVolWindow"] = pre_window["Volume_m3"].cumsum()
+    ref_vol = pre_window["CumVolWindow"].iloc[-1]  # total volume over previous months_before months
     ref_vols.append(ref_vol)
+if len(ref_vols) == 0:
+    raise RuntimeError("No reference volumes found for training years — check data coverage.")
 median_9mo_at_ref = np.median(ref_vols)
 
 for vy in sorted(val_years):
     ref_date = pd.Timestamp(vy, ref_month, ref_day)
     start_ref = ref_date - pd.DateOffset(months=months_before)
     end_ref = ref_date + pd.DateOffset(months=months_after)
-    sub = df.loc[str(vy)].copy()
-    if len(sub) == 0:
-        continue
-    sub["CumVol"] = sub["Volume_m3"].cumsum()
-    pre_df = sub.loc[start_ref:ref_date].copy()
-    post_df = sub.loc[ref_date:end_ref].copy()
-    if pre_df.empty or post_df.empty:
+
+    pre_df = df.loc[start_ref:ref_date].copy()
+    post_df = df.loc[ref_date:end_ref].copy()
+    if pre_df.empty or post_df.empty or (ref_date not in pre_df.index):
+        # skip if missing required data for this validation year
         continue
 
-    cum_at_ref = pre_df["CumVol"].iloc[-1]
-    true_inc = post_df["CumVol"].values - cum_at_ref
+    pre_df["CumVolWindow"] = pre_df["Volume_m3"].cumsum()
+    cum_at_ref = pre_df["CumVolWindow"].iloc[-1]
+    post_df = post_df.copy()
+    # For the true increment, compute cumulative from ref_date within the combined window
+    # Build a small window to compute increments consistently:
+    window_full = df.loc[start_ref:end_ref].copy()
+    window_full["CumVolWindow"] = window_full["Volume_m3"].cumsum()
+    true_inc = window_full.loc[window_full.index > ref_date, "CumVolWindow"].values - cum_at_ref
     n = len(true_inc)
+    if n == 0:
+        continue
 
     # Forecasts
     med_fore = median_inc[:n]
@@ -138,7 +164,8 @@ for vy in sorted(val_years):
     dry_fore = driest_inc[:n]
 
     # Shape-adjusted forecasts
-    ratio = cum_at_ref / median_9mo_at_ref  # relative wetness/dryness
+    # ratio = current 9-mo total / median 9-mo total  (relative wetness)
+    ratio = cum_at_ref / median_9mo_at_ref if median_9mo_at_ref != 0 else 1.0
     scaled_fore = median_inc[:n] * ratio
     stretched_days = days_common / ratio
     stretched_fore = np.interp(days_common[:n], stretched_days, median_inc, left=np.nan, right=np.nan)
@@ -146,22 +173,35 @@ for vy in sorted(val_years):
     # Metrics for main forecasts
     rmse_med = np.sqrt(mean_squared_error(true_inc, med_fore))
     rmse_log = np.sqrt(mean_squared_error(true_inc, log_fore))
-    r2_med = r2_score(true_inc, med_fore)
-    r2_log = r2_score(true_inc, log_fore)
+    # r2 will error if constant predictions or small n; guard with try/except
+    try:
+        r2_med = r2_score(true_inc, med_fore)
+    except Exception:
+        r2_med = np.nan
+    try:
+        r2_log = r2_score(true_inc, log_fore)
+    except Exception:
+        r2_log = np.nan
     results.append([vy, rmse_med, rmse_log, r2_med, r2_log])
 
     # === Visualization (9 months observed + 3 months forecast) ===
+    # Build plotting index: observed pre_df (start_ref:ref_date) and post_df (ref_date+...).
+    plot_window = df.loc[start_ref:end_ref].copy()
+    plot_window["CumVolWindow"] = plot_window["Volume_m3"].cumsum()
+    obs_pre = plot_window.loc[start_ref:ref_date]
+    obs_post = plot_window.loc[ref_date:end_ref]
+
     plt.figure(figsize=(10, 5))
-    plt.plot(pre_df.index, pre_df["CumVol"], color="black", label="Observed (previous 9 months)")
-    plt.plot(post_df.index, cum_at_ref + true_inc, color="black", linestyle="--", label="Observed (forecast period)")
-    plt.plot(post_df.index, cum_at_ref + scaled_fore, color="purple", label="Scaled median")
-    plt.plot(post_df.index, cum_at_ref + med_fore, color="green", label="Median forecast")
-    plt.plot(post_df.index, cum_at_ref + log_fore, color="orange", label="Logistic forecast")
-    plt.plot(post_df.index, cum_at_ref + stretched_fore, color="brown", label="Stretched median")
-    plt.plot(post_df.index, cum_at_ref + wet_fore, color="deepskyblue", linestyle=":", label=f"Wettest year ({wettest_year})")
-    plt.plot(post_df.index, cum_at_ref + dry_fore, color="darkred", linestyle=":", label=f"Driest year ({driest_year})")
+    plt.plot(obs_pre.index, obs_pre["CumVolWindow"], color="black", label="Observed (previous 9 months)")
+    plt.plot(obs_post.index, cum_at_ref + true_inc, color="black", linestyle="--", label="Observed (forecast period)")
+    plt.plot(obs_post.index, cum_at_ref + scaled_fore, color="purple", label="Scaled median")
+    plt.plot(obs_post.index, cum_at_ref + med_fore, color="green", label="Median forecast")
+    plt.plot(obs_post.index, cum_at_ref + log_fore, color="orange", label="Logistic forecast")
+    plt.plot(obs_post.index, cum_at_ref + stretched_fore, color="brown", label="Stretched median")
+    plt.plot(obs_post.index, cum_at_ref + wet_fore, color="deepskyblue", linestyle=":", label=f"Wettest year ({wettest_year})")
+    plt.plot(obs_post.index, cum_at_ref + dry_fore, color="darkred", linestyle=":", label=f"Driest year ({driest_year})")
     plt.axvline(ref_date, color="gray", linestyle=":", label="Forecast start")
-    plt.title(f"{vy} — 9-Month History + 3-Month Forecast")
+    plt.title(f"{vy} — 9-Month History + 3-Month Forecast (cross-year allowed)")
     plt.xlabel("Date")
     plt.ylabel("Cumulative Volume (m³)")
     plt.legend()
