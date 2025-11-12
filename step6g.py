@@ -16,7 +16,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"   # update path
 date_col = "Date"
 flow_col = "Flow_cms"
-ref_month, ref_day = 6, 15
+ref_month, ref_day = 1, 15
 months_before = 9
 months_after = 3
 validation_fraction = 0.1
@@ -152,23 +152,25 @@ for vy in sorted(val_years):
     # Build a small window to compute increments consistently:
     window_full = df.loc[start_ref:end_ref].copy()
     window_full["CumVolWindow"] = window_full["Volume_m3"].cumsum()
-    true_inc = window_full.loc[window_full.index > ref_date, "CumVolWindow"].values - cum_at_ref
+    true_inc = window_full.loc[window_full.index >= ref_date, "CumVolWindow"].values - cum_at_ref
     n = len(true_inc)
+
     if n == 0:
         continue
 
     # Forecasts
-    med_fore = median_inc[:n]
-    log_fore = logistic_inc[:n]
-    wet_fore = wettest_inc[:n]
-    dry_fore = driest_inc[:n]
+    med_fore = np.concatenate(([0], median_inc[:n - 1]))
+    log_fore = np.concatenate(([0], logistic_inc[:n - 1]))
+    wet_fore = np.concatenate(([0], wettest_inc[:n - 1]))
+    dry_fore = np.concatenate(([0], driest_inc[:n - 1]))
 
     # Shape-adjusted forecasts
     # ratio = current 9-mo total / median 9-mo total  (relative wetness)
     ratio = cum_at_ref / median_9mo_at_ref if median_9mo_at_ref != 0 else 1.0
-    scaled_fore = median_inc[:n] * ratio
+    scaled_fore = np.concatenate(([0], median_inc[:n - 1] * ratio))
     stretched_days = days_common / ratio
-    stretched_fore = np.interp(days_common[:n], stretched_days, median_inc, left=np.nan, right=np.nan)
+    stretched_fore = np.interp(days_common[:n - 1], stretched_days, median_inc, left=np.nan, right=np.nan)
+    stretched_fore = np.concatenate(([0], stretched_fore))
 
     # Metrics for main forecasts
     rmse_med = np.sqrt(mean_squared_error(true_inc, med_fore))
