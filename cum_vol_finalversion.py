@@ -1,7 +1,9 @@
 import pandas as pd
 import matplotlib
+import numpy as np
 matplotlib.use("TkAgg")  # or "Qt5Agg" if you prefer
 import matplotlib.pyplot as plt
+from datetime import datetime
 
 # --- Load data ---
 df = pd.read_csv("/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv")
@@ -16,12 +18,21 @@ df["Volume_m3"] = df["Flow_cms"] * 86400  # m³/s → m³/day
 df["Cumulative_Volume_m3"] = df.groupby("Year")["Volume_m3"].cumsum()
 
 # --- Compute total annual volume for each year ---
+current_year = datetime.now().year
 yearly_total = df.groupby("Year")["Volume_m3"].sum()
+yearly_total_clean = yearly_total.drop(current_year, errors="ignore")
+yearly_sorted = yearly_total_clean.sort_values()
+
+print(yearly_total)
 
 # Identify special years
-wettest_year = yearly_total.idxmax()
-driest_year = yearly_total.idxmin()
-median_year = yearly_total.sort_values().index[len(yearly_total)//2]
+
+wettest_year = yearly_sorted.idxmax()
+driest_year = yearly_sorted.idxmin()
+
+median_year = yearly_sorted.index[len(yearly_sorted)//2]
+year_25 = yearly_sorted.index[int(0.25 * (len(yearly_sorted) - 1))]
+year_75 = yearly_sorted.index[int(0.75 * (len(yearly_sorted) - 1))]
 
 print(f"Wettest year: {wettest_year}")
 print(f"Driest year: {driest_year}")
@@ -47,6 +58,8 @@ def plot_highlight(year, color, label):
 plot_highlight(wettest_year, "blue", f"Wettest ({wettest_year})")
 plot_highlight(driest_year, "red", f"Driest ({driest_year})")
 plot_highlight(median_year, "green", f"Median ({median_year})")
+plot_highlight(year_25, "yellow", f"25th Percentile ({year_25})")
+plot_highlight(year_75, "purple", f"75th Percentile ({year_75})")
 
 # Average line
 plt.plot(avg_cum["DOY"], avg_cum["Cumulative_Volume_m3"]/1e6,

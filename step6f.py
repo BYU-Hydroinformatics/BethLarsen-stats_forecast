@@ -16,7 +16,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"   # update path
 date_col = "Date"
 flow_col = "Flow_cms"
-ref_month, ref_day = 6, 15
+ref_month, ref_day = 9, 15
 months_before = 9
 months_after = 3
 validation_fraction = 0.1
