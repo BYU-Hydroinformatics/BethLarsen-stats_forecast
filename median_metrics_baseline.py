@@ -19,9 +19,9 @@ months_before = 9
 months_after = 3
 
 # Output folder for plots & csv
-out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/forecast_plots_scaled_median"
+out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/forecast_plots_median"
 os.makedirs(out_folder, exist_ok=True)
-metrics_csv_path = os.path.join(out_folder, "validation_metrics_scaled_median.csv")
+metrics_csv_path = os.path.join(out_folder, "validation_metrics_median1.csv")
 
 # ==========================================================
 # USER-TUNABLE
@@ -36,9 +36,11 @@ def build_post_increment_curves(df, years, ref_month, ref_day, months_before, mo
     Build DataFrame of post-reference cumulative increments for given years.
     Returns columns: Year, DayAfter, IncAfterRef
     """
+
     curves = []
     for y in years:
-        ref_date = pd.Timestamp(y, ref_month, ref_day)
+        base_ref = pd.Timestamp(year=2000, month=ref_month, day=ref_day)
+        ref_date = base_ref.replace(year=y)
         start_ref = ref_date - pd.DateOffset(months=months_before)
         end_ref = ref_date + pd.DateOffset(months=months_after)
 
@@ -128,34 +130,26 @@ for vy in years_all:
     wettest_inc = interp_df[wettest_year].values
     driest_inc = interp_df[driest_year].values
 
-    # compute median 9-month cumulative volume at ref date using training years (for scaling)
-    ref_vols = []
-    for y in train_years:
-        ref_date = pd.Timestamp(y, ref_month, ref_day)
-        start_ref = ref_date - pd.DateOffset(months=months_before)
-        pre_window = df.loc[start_ref:ref_date].copy()
-        if pre_window.empty or (ref_date not in pre_window.index):
-            continue
-        pre_window["CumVolWindow"] = pre_window["Volume_m3"].cumsum()
-        ref_vol = pre_window["CumVolWindow"].iloc[-1]
-        ref_vols.append(ref_vol)
-    if len(ref_vols) == 0:
-        print(f"Skipping {vy}: no reference volumes available from training years to compute median 9-mo at ref.")
-        skipped_years.append(vy)
-        continue
-    median_9mo_at_ref = np.median(ref_vols)
 
     # Build validation (true) windows for this validation year (allow cross-year)
     ref_date = pd.Timestamp(vy, ref_month, ref_day)
     start_ref = ref_date - pd.DateOffset(months=months_before)
     end_ref = ref_date + pd.DateOffset(months=months_after)
 
+
     pre_df = df.loc[start_ref:ref_date].copy()
     post_df = df.loc[ref_date:end_ref].copy()
+    ref_day_ts = ref_date.floor("D")
+    pre_days = pre_df.index.floor("D")
     # require pre and post presence and ref_date present in pre_df
-    if pre_df.empty or post_df.empty or (ref_date not in pre_df.index):
-        print(f"Skipping {vy}: missing pre or post data for validation year.")
-        skipped_years.append(vy)
+    #if pre_df.empty or post_df.empty or (ref_day_ts not in pre_days):
+        #print(f"Skipping {vy}: missing pre or post data for validation year.")
+        #skipped_years.append(vy)
+        #continue
+    if pre_df.empty:
+        continue
+
+    if len(post_df) < int(0.3 * months_after * 30):
         continue
 
     # compute cum_at_ref for validation year
@@ -177,13 +171,9 @@ for vy in years_all:
     wet_for_days = extend_or_trim(wettest_inc, n - 1)
     dry_for_days = extend_or_trim(driest_inc, n - 1)
 
-    # compute ratio = current 9-mo total / median 9-mo total (relative wetness)
-    ratio = cum_at_ref / median_9mo_at_ref if median_9mo_at_ref != 0 else 1.0
-    # scaled median forecast increments (day0=0, then day1..day_{n-1})
-    scaled_fore_inc = np.concatenate(([0], med_for_days * ratio))  # length n
 
-    # Use scaled median as the forecast (primary)
-    forecast_inc = extend_or_trim(scaled_fore_inc, n)
+    # Use median as the forecast (primary)
+    forecast_inc = extend_or_trim(median_inc, n)
     forecast_inc[0] = 0.0
 
     # True increments array
@@ -202,6 +192,7 @@ for vy in years_all:
     # --- NSE ---
     SSE = np.sum((y - yhat) ** 2)
     SST = np.sum((y - y_mean) ** 2)
+    SSR = np.sum((yhat - y_mean) ** 2)
     nse = 1 - SSE / SST if SST != 0 else np.nan
 
     # --- Willmott d1 (modified index of agreement) ---
@@ -210,15 +201,15 @@ for vy in years_all:
     d1 = 1 - numerator / denominator if denominator != 0 else np.nan
 
     # --- R² (traditional) ---
-    r2 = 1 - SSE / SST if SST != 0 else np.nan
+    r2 = SSR / SST if SST != 0 else np.nan
 
     final_obs = cum_at_ref + true_inc_arr[-1]
     final_fore = cum_at_ref + forecast_inc[-1]
     final_diff = final_obs - final_fore
 
-    metrics.append([vy, rmse, nse, d1, r2, final_diff])
+    metrics.append([vy, rmse, nse, d1, r2, final_diff, final_obs])
 
-    print(f"Year {vy} | RMSE={rmse:.3f} | R2={np.nan if pd.isna(r2) else r2:.3f} | FinalDiff={final_diff:.3f}")
+    print(f"Year {vy} | RMSE={rmse:.3f} | R2={np.nan if pd.isna(r2) else r2:.3f} | FinalDiff={final_diff:.3f} | FinalObs={final_obs}")
 
     # ==========================================================
     # PLOTTING (Observed history + observed future + forecasts)
@@ -253,16 +244,14 @@ for vy in years_all:
     plt.plot(obs_post_index, cum_at_ref + true_inc_arr, color="black", linestyle="--", label="Observed (forecast period)")
 
     # Plot median (unscaled) for reference
-    plt.plot(obs_post_index, med_cum, label="Median forecast (unscaled)")
+    plt.plot(obs_post_index, med_cum, label="Historical Median")
 
-    # Plot scaled median forecast (primary)
-    plt.plot(obs_post_index, scaled_cum, color="purple", label="Scaled median forecast (primary)")
 
     # Plot wet/dry training years for context
     plt.plot(obs_post_index, wet_cum, linestyle=":", label=f"Wettest training year ({wettest_year})")
     plt.plot(obs_post_index, dry_cum, linestyle=":", label=f"Driest training year ({driest_year})")
     plt.axvline(ref_date, color="gray", linestyle=":", label="Forecast start")
-    plt.title(f"{vy} — 9-Month History + 3-Month Forecast (Scaled Median Forecast)")
+    plt.title(f"{vy} — 9-Month History + 3-Month Median/Wettest/Driest)")
     plt.xlabel("Date")
     plt.ylabel("Cumulative Volume (m³)")
     plt.legend()
@@ -285,7 +274,8 @@ metrics_df = pd.DataFrame(
         "NSE",
         "Willmott_d1",
         "R2",
-        "FinalVolumeDiff"
+        "FinalVolumeDiff",
+        "FinalVol"
     ]
 )
 metrics_df = metrics_df.sort_values("Year").reset_index(drop=True)
