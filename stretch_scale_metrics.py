@@ -67,6 +67,18 @@ def extend_or_trim(arr, n):
     # repeat last value to match length
     return np.concatenate([arr, np.full(n - len(arr), arr[-1])])
 
+def stretch_curve(curve, stretch_factor, n):
+    """
+    Stretch or compress a curve in time.
+    stretch_factor > 1  → slower (later hydrologic year)
+    stretch_factor < 1  → faster (early hydrologic year)
+    """
+    x_old = np.arange(len(curve))
+    x_new = x_old / stretch_factor
+    stretched = np.interp(x_new, x_old, curve, left=0, right=curve[-1])
+    return extend_or_trim(stretched, n)
+
+
 # ==========================================================
 # LOAD DATA
 # ==========================================================
@@ -115,6 +127,30 @@ for vy in years_all:
         #print(f"Skipping {vy}: no training series reach the full post-ref window.")
         #skipped_years.append(vy)
         #continue
+    # -----------------------------------------
+    # HISTORICAL POST / PRE RATIO (training years)
+    # -----------------------------------------
+    ratios = []
+
+    for y in train_years:
+        ref_date_y = pd.Timestamp(y, ref_month, ref_day)
+        start_ref_y = ref_date_y - pd.DateOffset(months=months_before)
+        end_ref_y = ref_date_y + pd.DateOffset(months=months_after)
+
+        pre_y = df.loc[start_ref_y:ref_date_y]
+        post_y = df.loc[ref_date_y:end_ref_y]
+
+        if pre_y.empty or post_y.empty:
+            continue
+
+        pre_vol = pre_y["Volume_m3"].sum()
+        post_vol = post_y["Volume_m3"].sum()
+
+        if pre_vol > 0:
+            ratios.append(post_vol / pre_vol)
+
+    # median historical ratio
+    median_ratio = np.nanmedian(ratios) if len(ratios) > 0 else np.nan
 
     # median increment (per day after ref) across training years
     median_inc = interp_df.median(axis=1).values  # length = len(days_common)
@@ -152,6 +188,12 @@ for vy in years_all:
     pre_df["CumVolWindow"] = pre_df["Volume_m3"].cumsum()
     cum_at_ref = pre_df["CumVolWindow"].iloc[-1]
 
+    # observed volume in the 9-month pre period (validation year)
+    pre_volume_val = pre_df["Volume_m3"].sum()
+
+    # expected 3-month volume based on historical ratio
+    expected_post_volume = pre_volume_val * median_ratio
+
     # build full window to compute true increments consistently
     window_full = df.loc[start_ref:end_ref].copy()
     window_full["CumVolWindow"] = window_full["Volume_m3"].cumsum()
@@ -167,10 +209,20 @@ for vy in years_all:
     wet_for_days = extend_or_trim(wettest_inc, n - 1)
     dry_for_days = extend_or_trim(driest_inc, n - 1)
 
+    # -----------------------------------------
+    # STRETCHED / SCALED MEDIAN FORECAST
+    # -----------------------------------------
+    median_inc_trim = extend_or_trim(median_inc, n)
+    median_inc_trim[0] = 0.0
 
-    # Use median as the forecast (primary)
-    forecast_inc = extend_or_trim(median_inc, n)
-    forecast_inc[0] = 0.0
+    median_total = median_inc_trim[-1]
+
+    if median_total > 0 and not np.isnan(expected_post_volume):
+        scale_factor = expected_post_volume / median_total
+    else:
+        scale_factor = 1.0  # fallback (should be rare)
+
+    forecast_inc = median_inc_trim * scale_factor
 
     # True increments array
     true_inc_arr = np.asarray(true_inc)
