@@ -11,7 +11,7 @@ from scipy.optimize import curve_fit  # kept import though not used; safe to rem
 # ==========================================================
 # SETTINGS (update csv_path if needed)
 # ==========================================================
-csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_rhine.csv"
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_ohio.csv"
 date_col = "Date"
 flow_col = "Discharge"
 ref_month, ref_day = 1, 30
@@ -19,9 +19,9 @@ months_before = 9
 months_after = 3
 
 # Output folder for plots & csv
-out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/median_plots_metrics/forecast_plots_median_rhine"
+out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/median_plots_metrics/forecast_plots_median_ohio"
 os.makedirs(out_folder, exist_ok=True)
-metrics_csv_path = os.path.join(out_folder, "validation_metrics_median_rhine.csv")
+metrics_csv_path = os.path.join(out_folder, "validation_metrics_ohio_median.csv")
 
 
 # ==========================================================
@@ -43,7 +43,8 @@ def build_post_increment_curves(df, years, ref_month, ref_day, months_before, mo
         # continuous slice across year boundaries
         window = df.loc[start_ref:end_ref].copy()
         # require ref_date present and we have full window to end_ref
-        if window.empty or (ref_date not in window.index) or (window.index.max() < end_ref):
+        if window.empty or (ref_date not in window.index):
+            #or (window.index.max() < end_ref):
             continue
 
         window["CumVol"] = window["Volume_m3"].cumsum()
@@ -176,7 +177,7 @@ for vy in years_all:
     true_inc_arr = np.asarray(true_inc)
 
     # -----------------------------------------
-    # METRICS FOR SCALED MEDIAN METHOD
+    # METRICS FOR MEDIAN METHOD
     # -----------------------------------------
     y = true_inc_arr
     yhat = forecast_inc

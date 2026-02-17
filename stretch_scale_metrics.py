@@ -11,7 +11,7 @@ from scipy.optimize import curve_fit  # kept import though not used; safe to rem
 # ==========================================================
 # SETTINGS (update csv_path if needed)
 # ==========================================================
-csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_rhine.csv"
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_ohio.csv"
 date_col = "Date"
 flow_col = "Discharge"
 ref_month, ref_day = 1, 30
@@ -19,9 +19,9 @@ months_before = 9
 months_after = 3
 
 # Output folder for plots & csv
-out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/median_plots_metrics/forecast_plots_median_rhine"
+out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/SS_plots_metrics/forecast_plots_SS_ohio"
 os.makedirs(out_folder, exist_ok=True)
-metrics_csv_path = os.path.join(out_folder, "validation_metrics_median_rhine.csv")
+metrics_csv_path = os.path.join(out_folder, "validation_metrics_SS_ohio1.csv")
 
 
 # ==========================================================
@@ -43,7 +43,7 @@ def build_post_increment_curves(df, years, ref_month, ref_day, months_before, mo
         # continuous slice across year boundaries
         window = df.loc[start_ref:end_ref].copy()
         # require ref_date present and we have full window to end_ref
-        if window.empty or (ref_date not in window.index) or (window.index.max() < end_ref):
+        if window.empty or (ref_date not in window.index): #or (window.index.max() < end_ref):
             continue
 
         window["CumVol"] = window["Volume_m3"].cumsum()
@@ -68,15 +68,21 @@ def extend_or_trim(arr, n):
     return np.concatenate([arr, np.full(n - len(arr), arr[-1])])
 
 def stretch_curve(curve, stretch_factor, n):
-    """
-    Stretch or compress a curve in time.
-    stretch_factor > 1  → slower (later hydrologic year)
-    stretch_factor < 1  → faster (early hydrologic year)
-    """
     x_old = np.arange(len(curve))
     x_new = x_old / stretch_factor
-    stretched = np.interp(x_new, x_old, curve, left=0, right=curve[-1])
+
+    stretched = np.interp(
+        x_new,
+        x_old,
+        curve,
+        left=0,
+        right=curve[-1]
+    )
+
     return extend_or_trim(stretched, n)
+
+def enforce_monotonic(arr):
+    return np.maximum.accumulate(arr)
 
 
 # ==========================================================
@@ -152,6 +158,36 @@ for vy in years_all:
     # median historical ratio
     median_ratio = np.nanmedian(ratios) if len(ratios) > 0 else np.nan
 
+    # -----------------------------------------
+    # HISTORICAL TIMING (STRETCH) METRIC
+    # -----------------------------------------
+    stretch_timings = []
+
+    for y in train_years:
+        ref_y = pd.Timestamp(y, ref_month, ref_day)
+        start_y = ref_y - pd.DateOffset(months=months_before)
+
+        pre_y = df.loc[start_y:ref_y]
+        if pre_y.empty:
+            continue
+
+        pre_y = pre_y.copy()
+        pre_y["CumVol"] = pre_y["Volume_m3"].cumsum()
+        total_vol = pre_y["CumVol"].iloc[-1]
+
+        if total_vol <= 0:
+            continue
+
+        half_vol = 0.5 * total_vol
+
+        # Find first date cumulative volume exceeds 50%
+        half_date = pre_y.loc[pre_y["CumVol"] >= half_vol].index[0]
+
+        timing_days = (half_date - start_y).days
+        stretch_timings.append(timing_days)
+
+    median_timing = np.nanmedian(stretch_timings) if len(stretch_timings) > 0 else np.nan
+
     # median increment (per day after ref) across training years
     median_inc = interp_df.median(axis=1).values  # length = len(days_common)
 
@@ -172,7 +208,7 @@ for vy in years_all:
     pre_df = df.loc[start_ref:ref_date].copy()
     post_df = df.loc[ref_date:end_ref].copy()
     ref_day_ts = ref_date.floor("D")
-    pre_days = pre_df.index.floor("D")
+    pre_days = pre_df.index.floor("D") #rounds down to midnight (removes timestamp)
     # require pre and post presence and ref_date present in pre_df
     #if pre_df.empty or post_df.empty or (ref_day_ts not in pre_days):
         #print(f"Skipping {vy}: missing pre or post data for validation year.")
@@ -191,10 +227,27 @@ for vy in years_all:
     # observed volume in the 9-month pre period (validation year)
     pre_volume_val = pre_df["Volume_m3"].sum()
 
+    # -----------------------------------------
+    # VALIDATION YEAR TIMING
+    # -----------------------------------------
+    pre_val = pre_df.copy()
+    pre_val["CumVol"] = pre_val["Volume_m3"].cumsum()
+    total_val = pre_val["CumVol"].iloc[-1]
+
+    if total_val > 0 and not np.isnan(median_timing):
+        half_val = 0.5 * total_val
+        half_date_val = pre_val.loc[pre_val["CumVol"] >= half_val].index[0]
+        val_timing = (half_date_val - start_ref).days
+
+        stretch_factor = val_timing / median_timing
+    else:
+        stretch_factor = 1.0
+
+
     # expected 3-month volume based on historical ratio
     expected_post_volume = pre_volume_val * median_ratio
 
-    # build full window to compute true increments consistently
+    # build full window to compute true increments consistently, build true post-ref curve
     window_full = df.loc[start_ref:end_ref].copy()
     window_full["CumVolWindow"] = window_full["Volume_m3"].cumsum()
     true_inc = window_full.loc[window_full.index >= ref_date, "CumVolWindow"].values - cum_at_ref
@@ -210,22 +263,32 @@ for vy in years_all:
     dry_for_days = extend_or_trim(driest_inc, n - 1)
 
     # -----------------------------------------
-    # STRETCHED / SCALED MEDIAN FORECAST
+    # STRETCH + SCALE MEDIAN FORECAST
     # -----------------------------------------
+
     median_inc_trim = extend_or_trim(median_inc, n)
     median_inc_trim[0] = 0.0
 
-    median_total = median_inc_trim[-1]
+    # ---- STRETCH ----
+    stretched_inc = enforce_monotonic(
+        stretch_curve(median_inc_trim, stretch_factor, n)
+    )
+
+    # ---- SCALE ----
+    median_total = stretched_inc[-1]
 
     if median_total > 0 and not np.isnan(expected_post_volume):
         scale_factor = expected_post_volume / median_total
     else:
-        scale_factor = 1.0  # fallback (should be rare)
+        scale_factor = 1.0
 
-    forecast_inc = median_inc_trim * scale_factor
+    forecast_inc = stretched_inc * scale_factor
 
     # True increments array
     true_inc_arr = np.asarray(true_inc)
+    print(f"Stretch value: {stretch_factor}, Scale value: {scale_factor}")
+    print("Median timing:", median_timing)
+    print("Validation timing:", val_timing)
 
     # -----------------------------------------
     # METRICS FOR SCALED MEDIAN METHOD
@@ -255,10 +318,10 @@ for vy in years_all:
     three_month_obs = true_inc_arr[-1]
     final_fore = cum_at_ref + forecast_inc[-1]
     final_diff = final_obs - final_fore
-    final_diff_pe = final_diff/ final_obs
-    rmse_pe = rmse/final_obs
+    final_diff_3pe = final_diff/ three_month_obs
+    rmse_3pe = rmse/three_month_obs
 
-    metrics.append([vy, rmse, nse, d1, r2, final_diff, final_obs, final_diff_pe, rmse_pe, three_month_obs])
+    metrics.append([vy, rmse, nse, d1, r2, final_diff, final_obs, final_diff_3pe, rmse_3pe, three_month_obs])
 
     print(f"Year {vy} | RMSE={rmse:.3f} | R2={np.nan if pd.isna(r2) else r2:.3f} | FinalDiff={final_diff:.3f} | FinalObs={final_obs}")
 
@@ -294,8 +357,11 @@ for vy in years_all:
     # observed post (actual cumulative during forecast period)
     plt.plot(obs_post_index, cum_at_ref + true_inc_arr, color="black", linestyle="--", label="Observed (forecast period)")
 
+
     # Plot median (unscaled) for reference
     plt.plot(obs_post_index, med_cum, label="Historical Median")
+
+    plt.plot(obs_post_index, scaled_cum, label="Scaled Median Forecast")
 
 
     # Plot wet/dry training years for context
@@ -327,8 +393,8 @@ metrics_df = pd.DataFrame(
         "R2",
         "FinalVolumeDiff",
         "FinalVol",
-        "FinalDiffPE",
-        "RMSE_PE",
+        "FinalDiff3PE",
+        "RMSE_3PE",
         "3 Month Obs"
     ]
 )
