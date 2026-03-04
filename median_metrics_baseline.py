@@ -11,7 +11,7 @@ from scipy.optimize import curve_fit  # kept import though not used; safe to rem
 # ==========================================================
 # SETTINGS (update csv_path if needed)
 # ==========================================================
-csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_ohio.csv"
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_mississippi.csv"
 date_col = "Date"
 flow_col = "Discharge"
 ref_month, ref_day = 1, 30
@@ -19,9 +19,9 @@ months_before = 9
 months_after = 3
 
 # Output folder for plots & csv
-out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/median_plots_metrics/forecast_plots_median_ohio"
+out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/median_plots_metrics/forecast_plots_median_mississippi"
 os.makedirs(out_folder, exist_ok=True)
-metrics_csv_path = os.path.join(out_folder, "validation_metrics_ohio_median.csv")
+metrics_csv_path = os.path.join(out_folder, "validation_metrics_mississippi_median.csv")
 
 
 # ==========================================================
@@ -67,6 +67,11 @@ def extend_or_trim(arr, n):
         return np.zeros(n)
     # repeat last value to match length
     return np.concatenate([arr, np.full(n - len(arr), arr[-1])])
+
+def enforce_monotonic(arr):
+    """Ensure cumulative array never decreases."""
+    arr = np.asarray(arr)
+    return np.maximum.accumulate(arr)
 
 # ==========================================================
 # LOAD DATA
@@ -118,7 +123,9 @@ for vy in years_all:
         #continue
 
     # median increment (per day after ref) across training years
-    median_inc = interp_df.median(axis=1).values  # length = len(days_common)
+    median_inc = enforce_monotonic(
+        interp_df.median(axis=1).values
+    )  # length = len(days_common)
 
     # identify wettest/driest training years for plotting
     final_values = interp_df.apply(lambda c: c.dropna().iloc[-1])

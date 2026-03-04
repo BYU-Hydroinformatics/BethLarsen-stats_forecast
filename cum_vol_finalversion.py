@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 
 # --- Load data ---
-df = pd.read_csv("/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv")
+df = pd.read_csv("/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_ohio.csv")
 
 # --- Parse date and basic time columns ---
 df["Date"] = pd.to_datetime(df["Date"])
@@ -14,7 +14,7 @@ df["Year"] = df["Date"].dt.year
 df["DOY"] = df["Date"].dt.dayofyear
 
 # --- Compute daily and cumulative volume ---
-df["Volume_m3"] = df["Flow_cms"] * 86400  # m³/s → m³/day
+df["Volume_m3"] = df["Discharge"] * 86400  # m³/s → m³/day
 df["Cumulative_Volume_m3"] = df.groupby("Year")["Volume_m3"].cumsum()
 
 # --- Compute total annual volume for each year ---

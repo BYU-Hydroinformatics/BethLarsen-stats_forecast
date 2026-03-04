@@ -11,7 +11,7 @@ from scipy.optimize import curve_fit  # kept import though not used; safe to rem
 # ==========================================================
 # SETTINGS (update csv_path if needed)
 # ==========================================================
-csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_ohio.csv"
+csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_mississippi.csv"
 date_col = "Date"
 flow_col = "Discharge"
 ref_month, ref_day = 1, 30
@@ -19,9 +19,9 @@ months_before = 9
 months_after = 3
 
 # Output folder for plots & csv
-out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/SS_plots_metrics/forecast_plots_SS_ohio"
+out_folder = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/SS_plots_metrics/forecast_plots_SS_mississippi"
 os.makedirs(out_folder, exist_ok=True)
-metrics_csv_path = os.path.join(out_folder, "validation_metrics_SS_ohio1.csv")
+metrics_csv_path = os.path.join(out_folder, "validation_metrics_SS_mississippi.csv")
 
 
 # ==========================================================
@@ -264,25 +264,28 @@ for vy in years_all:
 
     # -----------------------------------------
     # STRETCH + SCALE MEDIAN FORECAST
+    # (stretch increments -> then cumulate)
     # -----------------------------------------
-
     median_inc_trim = extend_or_trim(median_inc, n)
-    median_inc_trim[0] = 0.0
 
-    # ---- STRETCH ----
-    stretched_inc = enforce_monotonic(
-        stretch_curve(median_inc_trim, stretch_factor, n)
-    )
+    # ---- STRETCH DAILY INCREMENTS ----
+    stretched_inc = stretch_curve(median_inc_trim, stretch_factor, n)
 
-    # ---- SCALE ----
-    median_total = stretched_inc[-1]
+    # enforce non-negative increments
+    stretched_inc = np.maximum(stretched_inc, 0)
+
+    # ---- CUMULATE AFTER STRETCH ----
+    forecast_cum = np.cumsum(stretched_inc)
+
+    # ---- SCALE AFTER CUMULATION ----
+    median_total = forecast_cum[-1]
 
     if median_total > 0 and not np.isnan(expected_post_volume):
         scale_factor = expected_post_volume / median_total
     else:
         scale_factor = 1.0
 
-    forecast_inc = stretched_inc * scale_factor
+    forecast_cum *= scale_factor
 
     # True increments array
     true_inc_arr = np.asarray(true_inc)
@@ -294,7 +297,7 @@ for vy in years_all:
     # METRICS FOR SCALED MEDIAN METHOD
     # -----------------------------------------
     y = true_inc_arr
-    yhat = forecast_inc
+    yhat = forecast_cum
     y_mean = np.mean(y)
 
     # RMSE
@@ -316,7 +319,7 @@ for vy in years_all:
 
     final_obs = cum_at_ref + true_inc_arr[-1]
     three_month_obs = true_inc_arr[-1]
-    final_fore = cum_at_ref + forecast_inc[-1]
+    final_fore = cum_at_ref + forecast_cum[-1]
     final_diff = final_obs - final_fore
     final_diff_3pe = final_diff/ three_month_obs
     rmse_3pe = rmse/three_month_obs
@@ -335,7 +338,7 @@ for vy in years_all:
     obs_post_index = plot_window.loc[ref_date:end_ref].index
 
     # cumulative series for plotting
-    scaled_cum = cum_at_ref + forecast_inc
+    scaled_cum = cum_at_ref + forecast_cum
 
     # median and wet/dry cumulative series for plotting (prepend cum_at_ref as day0)
     med_inc_full = np.concatenate(([0], med_for_days))

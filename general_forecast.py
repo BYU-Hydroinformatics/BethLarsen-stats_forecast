@@ -10,10 +10,10 @@ import matplotlib.pyplot as plt
 # USER SETTINGS
 # -------------------------------
 
-input_csv = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"
+input_csv = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_ohio.csv"
 
 date_col = "Date"
-flow_col = "Flow_cms"
+flow_col = "Discharge"
 
 past_months = 9
 future_months = 3
