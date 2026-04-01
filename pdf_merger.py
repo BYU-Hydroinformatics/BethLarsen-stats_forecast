@@ -3,7 +3,7 @@ from pypdf import PdfReader, PdfWriter
 
 # ======= USER SETTINGS =======
 pdf_folder = "/Users/bethlarsen/Downloads/pdfs/temp_pdf"
-output_file = "/Users/bethlarsen/Downloads/pdfs/combined/midterm1"
+output_file = "/Users/bethlarsen/Downloads/pdfs/combined/midterm1.pdf"
 # ==============================
 
 writer = PdfWriter()
