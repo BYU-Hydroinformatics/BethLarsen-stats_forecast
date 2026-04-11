@@ -23,8 +23,8 @@ def generate_synthetic_era5(
         target_start_year,
         target_end_year,
         date_col="Date",
-        precip_col="precipitation",
-        temp_col="temperature",
+        precip_col="precip_total",
+        temp_col="temperature_2m",
         snow_col="snowfall",
         noise_scale=0.05,
         random_seed=42,
@@ -81,6 +81,9 @@ def generate_synthetic_era5(
     print(f"Real data covers: {real[date_col].min().date()} to {real[date_col].max().date()}")
     print(f"Generating synthetic data from {target_start_year} to {target_end_year}")
     print(f"Noise scale: {noise_scale} (={noise_scale * 100:.0f}% of each variable's std dev)")
+
+    print("Real data date range:", real["date"].min(), real["date"].max())
+
     for col in climate_cols:
         print(f"  {col}: noise std = {noise_stds[col]:.4f}")
 
@@ -178,6 +181,8 @@ def generate_synthetic_era5(
     # Save — drop the source column for clean output
     out = combined.drop(columns=["source"])
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    out["date"] = out["date"].dt.strftime("%Y-%m-%d")
+
     out.to_csv(output_path, index=False)
     print(f"\nSynthetic ERA-5 data saved to: {output_path}")
 
@@ -191,28 +196,29 @@ def generate_synthetic_era5(
 if __name__ == "__main__":
     # Path to your real 1-2 years of ERA-5 data
     REAL_CLIMATE_PATH = (
-        "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/"
-        "Retrospective_Data/era5_ohio_real.csv"  # <-- update this
+        "/Users/bethlarsen/Downloads/era5_daily_trent.csv"  # <-- update this
     )
 
     # Where to save the synthetic + real combined output
     OUTPUT_PATH = (
         "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/"
-        "Retrospective_Data/era5_ohio_synthetic.csv"
+        "Retrospective_Data/retrospective_era5/era5_trent_synthetic.csv"
     )
 
     # These should match the date range of your streamflow record
     TARGET_START_YEAR = 1940
-    TARGET_END_YEAR = 2024
+    TARGET_END_YEAR = 2025
+
+
 
     combined = generate_synthetic_era5(
         real_climate_path=REAL_CLIMATE_PATH,
         output_path=OUTPUT_PATH,
         target_start_year=TARGET_START_YEAR,
         target_end_year=TARGET_END_YEAR,
-        date_col="Date",
-        precip_col="precipitation",
-        temp_col="temperature",
+        date_col="date",
+        precip_col="precip_total",
+        temp_col="temperature_2m",
         snow_col="snowfall",
         noise_scale=0.05,  # increase for more variety, decrease for closer to real
         random_seed=42,

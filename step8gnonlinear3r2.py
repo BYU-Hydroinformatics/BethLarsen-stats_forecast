@@ -13,7 +13,7 @@ from scipy.optimize import curve_fit
 # ==========================================================
 csv_path = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/retrospective_760706416.csv"
 date_col = "Date"
-flow_col = "Flow_cms"
+flow_col = "Discharge"
 ref_month, ref_day = 9, 15
 months_before = 9
 months_after = 3

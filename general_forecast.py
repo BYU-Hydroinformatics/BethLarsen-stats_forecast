@@ -38,7 +38,7 @@ df[date_col] = df[date_col].dt.tz_localize(None)
 df["Year"] = df[date_col].dt.year
 
 # Convert discharge (m3/s) to daily volume (m3)
-df["volume_cms"] = df["Flow_cms"] * 86400.0
+df["volume_cms"] = df["Discharge"] * 86400.0
 
 today = df[date_col].max().floor("D")
 current_year = today.year
