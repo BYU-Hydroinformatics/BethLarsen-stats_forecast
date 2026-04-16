@@ -3,39 +3,34 @@ matplotlib.use("TkAgg")
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 
 def prepare_water_year_dataframe(df, date_col, volume_col):
     df = df.copy()
 
     df[date_col] = pd.to_datetime(df[date_col])
-
-    # Remove timezone if present
     df[date_col] = df[date_col].dt.tz_localize(None)
     df = df.sort_values(date_col)
 
-    # Water Year
     df["Water_Year"] = df[date_col].apply(
         lambda d: d.year + 1 if d.month >= 10 else d.year
     )
 
-    # Water Year Day
     wy_start_dates = pd.to_datetime(
         df["Water_Year"] - 1, format="%Y"
-    ) + pd.offsets.DateOffset(months=9)  # Oct 1
+    ) + pd.offsets.DateOffset(months=9)
 
     df["WY_Day"] = (df[date_col] - wy_start_dates).dt.days + 1
 
-    # Cumulative Volume
     df["Cumulative_Volume"] = (
-        df.groupby("Water_Year")[volume_col]
-        .cumsum()
+        df.groupby("Water_Year")[volume_col].cumsum()
     )
 
     return df
 
 
-def water_year_forecast_loyo(
+def water_year_forecast_90day(
     df,
     forecast_date,
     date_col="Date",
@@ -43,29 +38,34 @@ def water_year_forecast_loyo(
     slope_window=7,
     n_analogs=5,
     min_wy_day=14,
+    forecast_horizon=90,
 ):
     """
-    Water-year cumulative forecast (LOYO-safe).
+    90-day ahead water year cumulative forecast (LOYO-safe).
+
+    Rather than forecasting to the end of the water year, this function
+    forecasts cumulative volume for the next `forecast_horizon` days only.
+    The observed cumulative curve still starts from Oct 1 (WY day 1).
 
     Parameters
     ----------
     df : DataFrame
-        Must contain full multi-year daily data.
     forecast_date : datetime
-        Evaluation date inside the test WY.
     date_col : str
     volume_col : str
     slope_window : int
     n_analogs : int
     min_wy_day : int
+    forecast_horizon : int
+        Number of days ahead to forecast (default 90)
 
     Returns
     -------
     dict with:
-        observed_up_to_date
-        forecast_curve
-        final_total_projection
-        true_remaining_curve
+        observed_up_to_date   — full observed cumulative from WY start to forecast date
+        forecast_curve        — projected cumulative for next `forecast_horizon` days
+        horizon_total_projection — projected cumulative volume at end of horizon
+        true_curve            — actual observed cumulative over the forecast window
         metadata
     """
 
@@ -76,7 +76,7 @@ def water_year_forecast_loyo(
     forecast_date = pd.to_datetime(forecast_date)
 
     # -----------------------------
-    # 1. Assign Water Year
+    # 1. Assign Water Year + WY_Day
     # -----------------------------
     df["WaterYear"] = df[date_col].dt.year
     df.loc[df[date_col].dt.month >= 10, "WaterYear"] += 1
@@ -100,6 +100,7 @@ def water_year_forecast_loyo(
     test_wy = test_row["WaterYear"]
     current_wy_day = test_row["WY_Day"]
     current_cum = test_row["CumVol_WY"]
+    horizon_day = current_wy_day + forecast_horizon
 
     if current_wy_day < min_wy_day:
         raise ValueError("Too early in WY for stable forecast.")
@@ -109,21 +110,28 @@ def water_year_forecast_loyo(
     # -----------------------------
     hist = df[df["WaterYear"] != test_wy].copy()
 
-    wy_totals = hist.groupby("WaterYear")[volume_col].sum()
+    # Use volume accumulated over the next `forecast_horizon` days as target
+    # For each historical WY, compute cumulative at current_wy_day and at horizon_day
+    hist_at_start = hist[hist["WY_Day"] == current_wy_day].set_index("WaterYear")["CumVol_WY"]
+    hist_at_horizon = hist[hist["WY_Day"] == horizon_day].set_index("WaterYear")["CumVol_WY"]
 
+    valid_wys = hist_at_start.index.intersection(hist_at_horizon.index)
 
-    hist_at_day = hist[hist["WY_Day"] == current_wy_day].drop_duplicates(subset="WaterYear")
+    # Volume added over the horizon window in each historical year
+    hist_horizon_volume = hist_at_horizon.loc[valid_wys] - hist_at_start.loc[valid_wys]
+    hist_horizon_volume = hist_horizon_volume[hist_horizon_volume > 0]
 
-    hist_cum = hist_at_day.set_index("WaterYear")["CumVol_WY"]
+    if len(hist_horizon_volume) == 0:
+        raise ValueError("No valid historical horizon volumes found.")
 
-    valid_wys = hist_cum.index.intersection(wy_totals.index)
+    # Ratio of current cumulative to historical cumulative at same day
+    fraction_of_hist = current_cum / hist_at_start.loc[hist_horizon_volume.index]
+    fraction_of_hist = fraction_of_hist.replace([np.inf, -np.inf], np.nan).dropna()
 
-    fraction_complete = hist_cum.loc[valid_wys] / wy_totals.loc[valid_wys]
-    fraction_complete = fraction_complete.replace(0, np.nan).dropna()
-
-    projected_totals = current_cum / fraction_complete
-
-    final_total_projection = projected_totals.median()
+    # Scale historical horizon volumes by how the current year compares so far
+    projected_horizon_volumes = hist_horizon_volume.loc[fraction_of_hist.index] * fraction_of_hist
+    horizon_volume_projection = projected_horizon_volumes.median()
+    horizon_total_projection = current_cum + horizon_volume_projection
 
     # -----------------------------
     # 4. Slope-Based Analog Selection
@@ -153,15 +161,19 @@ def water_year_forecast_loyo(
     top_analogs = slope_diff.nsmallest(n_analogs).index
 
     # -----------------------------
-    # 5. Build Normalized Remainder Shapes
+    # 5. Build Normalized Remainder Shapes (90-day window only)
     # -----------------------------
     remainder_shapes = []
 
     for wy in top_analogs:
         sub = hist[hist["WaterYear"] == wy].copy()
-        sub = sub[sub["WY_Day"] >= current_wy_day]
 
-        # FIX: drop duplicate WY_Day rows before indexing
+        # Only look at the forecast horizon window
+        sub = sub[
+            (sub["WY_Day"] >= current_wy_day) &
+            (sub["WY_Day"] <= horizon_day)
+        ]
+
         sub = sub.drop_duplicates(subset="WY_Day")
 
         if current_wy_day not in sub["WY_Day"].values:
@@ -180,26 +192,29 @@ def water_year_forecast_loyo(
             sub[["WY_Day", "NormShape"]].drop_duplicates("WY_Day").set_index("WY_Day")
         )
 
-        if len(remainder_shapes) == 0:
-            raise ValueError("No valid analog shapes found.")
+    if len(remainder_shapes) == 0:
+        raise ValueError("No valid analog shapes found.")
 
-        shape_df = pd.concat(remainder_shapes, axis=1)
-        mean_shape = shape_df.mean(axis=1)
+    shape_df = pd.concat(remainder_shapes, axis=1)
+    mean_shape = shape_df.mean(axis=1)
 
-        remaining_volume = final_total_projection - current_cum
-        forecast_cum = current_cum + remaining_volume * mean_shape
+    # Scale the shape to match the projected horizon volume
+    forecast_cum = current_cum + horizon_volume_projection * mean_shape
 
-        forecast_curve = pd.DataFrame({
-            "WY_Day": mean_shape.index,
-            "ForecastCum": forecast_cum.values
-        })
+    forecast_curve = pd.DataFrame({
+        "WY_Day": mean_shape.index,
+        "ForecastCum": forecast_cum.values
+    })
 
     # -----------------------------
-    # 6. True Remaining Curve (For Metrics)
+    # 6. True Curve Over Horizon (For Metrics)
     # -----------------------------
     true_wy = df[df["WaterYear"] == test_wy].copy()
 
-    true_future = true_wy[true_wy["WY_Day"] >= current_wy_day].copy()
+    true_future = true_wy[
+        (true_wy["WY_Day"] >= current_wy_day) &
+        (true_wy["WY_Day"] <= horizon_day)
+    ].copy()
 
     true_curve = true_future[["WY_Day", "CumVol_WY"]].copy()
     true_curve.rename(columns={"CumVol_WY": "TrueCum"}, inplace=True)
@@ -212,82 +227,14 @@ def water_year_forecast_loyo(
         "observed_up_to_date": observed_up_to_date,
         "forecast_curve": forecast_curve,
         "true_curve": true_curve,
-        "final_total_projection": final_total_projection,
+        "horizon_total_projection": horizon_total_projection,
         "metadata": {
             "test_wy": test_wy,
             "forecast_date": forecast_date,
             "current_wy_day": current_wy_day,
+            "horizon_day": horizon_day,
         }
     }
-
-
-def plot_water_year_forecasts(df, forecast_store, target_wy):
-    """
-    Plot observed cumulative curve and analog-shaped forecast curves
-    for a given water year.
-
-    Parameters
-    ----------
-    df : DataFrame
-        Prepared dataframe with Water_Year, WY_Day, Cumulative_Volume columns.
-    forecast_store : dict
-        Keyed by (WaterYear, evaluation_wy_day), values are the full result
-        dicts returned by water_year_forecast_loyo.
-    target_wy : int
-        The water year to plot.
-    """
-    wy_obs = df[df["Water_Year"] == target_wy]
-
-    plt.figure(figsize=(12, 6))
-
-    # Plot true observed cumulative curve for full WY
-    plt.plot(
-        wy_obs["WY_Day"],
-        wy_obs["Cumulative_Volume"],
-        label="Observed",
-        linewidth=2,
-        color="black"
-    )
-
-    # Plot each stored forecast curve for this WY
-    wy_keys = [(wy, day) for (wy, day) in forecast_store if wy == target_wy]
-    wy_keys_sorted = sorted(wy_keys, key=lambda x: x[1])
-
-    for (wy, eval_day) in wy_keys_sorted:
-        fc = forecast_store[(wy, eval_day)]
-
-        observed = fc["observed_up_to_date"]
-        forecast_curve = fc["forecast_curve"]
-
-        # Combine observed portion + forecast remainder into one curve
-        obs_segment = observed[["WY_Day", "CumVol_WY"]].rename(
-            columns={"CumVol_WY": "Cum"}
-        )
-        fcast_segment = forecast_curve.rename(
-            columns={"ForecastCum": "Cum"}
-        )
-
-        # Drop the overlap point from forecast so they join cleanly
-        fcast_segment = fcast_segment[fcast_segment["WY_Day"] > obs_segment["WY_Day"].max()]
-
-        combined = pd.concat([obs_segment, fcast_segment], ignore_index=True)
-
-        plt.plot(
-            combined["WY_Day"],
-            combined["Cum"],
-            linestyle="--",
-            label=f"Forecast @ WY Day {eval_day}"
-        )
-
-        # Mark the evaluation point
-        plt.axvline(x=eval_day, color="grey", linestyle=":", alpha=0.4)
-
-    plt.xlabel("Water Year Day")
-    plt.ylabel("Cumulative Volume (m³)")
-    plt.title(f"Cumulative Volume Forecast — WY {target_wy}")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
 
 
 def rmse(a, b):
@@ -302,13 +249,14 @@ def nse(sim, obs):
     return 1 - np.sum((sim - obs)**2) / np.sum((obs - np.mean(obs))**2)
 
 
-def run_loyo_evaluation(
+def run_loyo_evaluation_90day(
     df,
     date_col="Date",
     volume_col="Volume_m3",
     slope_window=7,
     n_analogs=5,
-    evaluation_wy_days=(30, 60, 90, 120, 150, 180, 270)
+    forecast_horizon=90,
+    evaluation_wy_days=(45, 90, 135, 180, 225, 270)
 ):
     df = df.copy()
     df[date_col] = pd.to_datetime(df[date_col])
@@ -341,40 +289,41 @@ def run_loyo_evaluation(
 
             forecast_date = eval_row[date_col].values[0]
 
-            try:                                          # <-- try
-                fc = water_year_forecast_loyo(
+            try:
+                fc = water_year_forecast_90day(
                     df,
                     forecast_date=forecast_date,
                     date_col=date_col,
                     volume_col=volume_col,
                     slope_window=slope_window,
-                    n_analogs=n_analogs
+                    n_analogs=n_analogs,
+                    forecast_horizon=forecast_horizon,
                 )
 
                 forecast_curve = fc["forecast_curve"]
                 true_curve = fc["true_curve"]
 
-                merged = forecast_curve.merge(
-                    true_curve,
-                    on="WY_Day",
-                    how="inner"
-                )
+                merged = forecast_curve.merge(true_curve, on="WY_Day", how="inner")
 
                 if len(merged) >= 5:
                     sim = merged["ForecastCum"].values
                     obs = merged["TrueCum"].values
 
-                    true_final = true_curve["TrueCum"].max()
-                    pred_final = fc["final_total_projection"]
+                    true_horizon_vol = true_curve["TrueCum"].max() - true_curve["TrueCum"].min()
+                    pred_horizon_vol = fc["horizon_total_projection"] - true_curve["TrueCum"].min()
 
                     results.append({
                         "WaterYear": test_wy,
                         "Evaluation_WY_Day": wy_day,
+                        "Horizon_Day": wy_day + forecast_horizon,
                         "ForecastDate": forecast_date,
-                        "FinalTrue": true_final,
-                        "Forecast_Total": pred_final,
-                        "FinalError": pred_final - true_final,
-                        "FinalPctError": (pred_final - true_final) / true_final * 100,
+                        "TrueHorizonVol": true_curve["TrueCum"].max(),
+                        "PredHorizonVol": fc["horizon_total_projection"],
+                        "HorizonError": fc["horizon_total_projection"] - true_curve["TrueCum"].max(),
+                        "HorizonPctError": (
+                            (fc["horizon_total_projection"] - true_curve["TrueCum"].max())
+                            / true_curve["TrueCum"].max() * 100
+                        ),
                         "RMSE": rmse(sim, obs),
                         "Bias": bias(sim, obs),
                         "NSE": nse(sim, obs)
@@ -382,8 +331,6 @@ def run_loyo_evaluation(
 
                     forecast_store[(test_wy, wy_day)] = fc
 
-            #except Exception as e:                        # <-- except at same level as try
-                #print(f"Skipping WY {test_wy} day {wy_day}: {e}")
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -394,7 +341,7 @@ def run_loyo_evaluation(
 # -----------------------------
 # Main
 # -----------------------------
-df = pd.read_csv("/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_trent.csv")
+df = pd.read_csv('/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Retrospective_Data/retrospective_rhine.csv')
 
 df["Date"] = pd.to_datetime(df["Date"])
 df = df.sort_values("Date")
@@ -408,30 +355,27 @@ df = prepare_water_year_dataframe(
     volume_col="Volume_m3"
 )
 
-# run_loyo_evaluation now returns both the results table and the forecast store
-results_df, forecast_store = run_loyo_evaluation(
+results_df, forecast_store = run_loyo_evaluation_90day(
     df,
     date_col="Date",
     volume_col="Volume_m3",
     slope_window=7,
     n_analogs=5,
-    evaluation_wy_days=(30, 60, 90, 120, 150, 180, 270)
+    forecast_horizon=90,
+    evaluation_wy_days= (45, 90, 135, 180, 225, 270)
 )
 
 print(results_df.head())
 print(results_df.describe())
 
-
-import os
-
 # -----------------------------
-# Save results_df to CSV
+# Save results CSV
 # -----------------------------
-output_dir = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/water_year_forecast/trent"
+output_dir = "/Users/bethlarsen/Downloads/Hydro Lab/stat_forecast_project/Forecast_Results_90day/rhine"
 os.makedirs(output_dir, exist_ok=True)
 
-results_df.to_csv(os.path.join(output_dir, "loyo_results.csv"), index=False)
-print(f"Results saved to {output_dir}/loyo_results.csv")
+results_df.to_csv(os.path.join(output_dir, "loyo_results_90day.csv"), index=False)
+print(f"Results saved to {output_dir}/loyo_results_90day.csv")
 
 # -----------------------------
 # Plot and save every water year
@@ -446,27 +390,30 @@ for wy in available_wys:
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Observed full curve
+    # Full observed cumulative curve for context
     ax.plot(
         wy_obs["WY_Day"],
         wy_obs["Cumulative_Volume"],
-        label="Observed",
+        label="Observed (full year)",
         linewidth=2,
         color="black"
     )
 
-    # Forecast curves for each evaluation day
-    wy_keys_sorted = sorted((day for (y, day) in forecast_store.keys() if y == wy))
+    wy_keys_sorted = sorted(day for (y, day) in forecast_store.keys() if y == wy)
 
     for eval_day in wy_keys_sorted:
         fc = forecast_store[(wy, eval_day)]
+        horizon_day = fc["metadata"]["horizon_day"]
 
         observed = fc["observed_up_to_date"]
         forecast_curve = fc["forecast_curve"]
 
+        # Observed segment up to forecast date
         obs_segment = observed[["WY_Day", "CumVol_WY"]].rename(
             columns={"CumVol_WY": "Cum"}
         )
+
+        # Forecast segment (90 days ahead only)
         fcast_segment = forecast_curve.rename(columns={"ForecastCum": "Cum"})
         fcast_segment = fcast_segment[
             fcast_segment["WY_Day"] > obs_segment["WY_Day"].max()
@@ -474,21 +421,24 @@ for wy in available_wys:
 
         combined = pd.concat([obs_segment, fcast_segment], ignore_index=True)
 
-        ax.plot(
+        line, = ax.plot(
             combined["WY_Day"],
             combined["Cum"],
             linestyle="--",
-            label=f"Forecast @ WY Day {eval_day}"
+            label=f"Forecast @ WY Day {eval_day} (→ Day {horizon_day})"
         )
-        ax.axvline(x=eval_day, color="grey", linestyle=":", alpha=0.4)
+
+        # Mark start and end of forecast window
+        ax.axvline(x=eval_day, color=line.get_color(), linestyle=":", alpha=0.4)
+        ax.axvline(x=horizon_day, color=line.get_color(), linestyle=":", alpha=0.4)
 
     ax.set_xlabel("Water Year Day")
     ax.set_ylabel("Cumulative Volume (m³)")
-    ax.set_title(f"Cumulative Volume Forecast — WY {wy}")
+    ax.set_title(f"90-Day Ahead Cumulative Volume Forecast — WY {wy}")
     ax.legend(fontsize=8)
     plt.tight_layout()
 
-    plot_path = os.path.join(plots_dir, f"WY_{wy}_forecast.png")
+    plot_path = os.path.join(plots_dir, f"WY_{wy}_90day_forecast.png")
     fig.savefig(plot_path, dpi=150)
     plt.close(fig)
     print(f"Saved plot for WY {wy}")
